@@ -7,6 +7,7 @@
  * See README.md for further information.
  */
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,9 +30,22 @@
  * Remember to update errstr() if updating these codes!
  */
 #define ERR_OK    (0)   /* No error */
+#define ERR_NOSIG (1)   /* Failed to read script signature */
+#define ERR_HEADC (2)   /* Invalid header metacommand */
+#define ERR_HEADR (3)   /* Repetition of header metacommand */
+#define ERR_HEADS (4)   /* Header metacommand syntax error */
+#define ERR_DIM   (5)   /* Dimension out of range */
+#define ERR_SHADE (6)   /* Unrecognized shading mode */
+#define ERR_NODIM (7)   /* Dimensions not declared */
+#define ERR_NOSHA (8)   /* Shading mode not declared */
+#define ERR_STRAY (9)   /* Stray metacommand after header */
+#define ERR_MANYV (10)  /* Too many vertices */
+#define ERR_MANYT (11)  /* Too many triangles */
 
 /*
  * Shading mode constants.
+ * 
+ * These must be greater than zero.
  */
 #define SHADE_FLAT  (1)   /* Flat shading */
 #define SHADE_INTER (2)   /* Interpolated shading */
@@ -116,6 +130,7 @@ static int first_pass(
     long        * pline);
 
 static const char *errstr(int code);
+static int parseInt(const char *pstr, int32_t *pv);
 
 /*
  * Run the first pass on the Shastina script.
@@ -163,14 +178,324 @@ static int first_pass(
     int         * perr,
     long        * pline) {
   
-  /* @@TODO: */
+  int status = 1;
+  int i = 0;
+  int32_t iv = 0;
+  SNPARSER *pr = NULL;
+  SNENTITY ent;
+  
+  /* Clear structures */
+  memset(&ent, 0, sizeof(SNENTITY));
+  
+  /* Check parameters */
+  if ((pSrc == NULL) || (psi == NULL) ||
+      (perr == NULL) || (pline == NULL)) {
+    abort();
+  }
+  if (!snsource_ismulti(pSrc)) {
+    abort();
+  }
+  
+  /* Reset return state */
   memset(psi, 0, sizeof(SCRIPT_INFO));
-  psi->w = 640;
-  psi->h = 480;
-  psi->shade = SHADE_FLAT;
-  psi->vcount = 4096;
-  psi->tcount = 1024;
-  return 1;
+  *perr = ERR_OK;
+  *pline = 0;
+  
+  /* Rewind the source */
+  if (!snsource_rewind(pSrc)) {
+    status = 0;
+    *perr = SNERR_IOERR;
+  }
+  
+  /* Get a Shastina parser */
+  if (status) {
+    pr = snparser_alloc();
+  }
+  
+  /* Read the file signature */
+  if (status) {
+    snparser_read(pr, &ent, pSrc);
+    if (ent.status != SNENTITY_BEGIN_META) {
+      status = 0;
+      *perr = ERR_NOSIG;
+    }
+  }
+  if (status) {
+    snparser_read(pr, &ent, pSrc);
+    if (ent.status != SNENTITY_META_TOKEN) {
+      status = 0;
+      *perr = ERR_NOSIG;
+    }
+    if (status && (strcmp(ent.pKey, "dhrender") != 0)) {
+      status = 0;
+      *perr = ERR_NOSIG;
+    }
+  }
+  if (status) {
+    snparser_read(pr, &ent, pSrc);
+    if (ent.status != SNENTITY_END_META) {
+      status = 0;
+      *perr = ERR_NOSIG;
+    }
+  }
+  
+  /* Clear the metacommand header fields in the info structure */
+  if (status) {
+    psi->w = 0;
+    psi->h = 0;
+    psi->shade = 0;
+  }
+  
+  /* Read rest of metacommand header */
+  if (status) {
+    for(snparser_read(pr, &ent, pSrc);
+        ent.status == SNENTITY_BEGIN_META;
+        snparser_read(pr, &ent, pSrc)) {
+      
+      /* Metacommand starting, so read the token that determines which
+       * command */
+      snparser_read(pr, &ent, pSrc);
+      if (ent.status < 0) {
+        status = 0;
+        *perr = ent.status;
+        *pline = snparser_count(pr);
+        
+      } else if (ent.status != SNENTITY_META_TOKEN) {
+        status = 0;
+        *perr = ERR_HEADC;
+        *pline = snparser_count(pr);
+      }
+      
+      /* Get parameters appropriate to metacommand and process */
+      if (status && (strcmp(ent.pKey, "dim") == 0)) {
+        /* Dimension metacommand; make sure not already used */
+        if ((psi->w > 0) || (psi->h > 0)) {
+          status = 0;
+          *perr = ERR_HEADR;
+          *pline = snparser_count(pr);
+        }
+        
+        /* Read two integer tokens for width and height */
+        if (status) {
+          for(i = 0; i < 2; i++) {
+            
+            /* Read a metacommand token */
+            snparser_read(pr, &ent, pSrc);
+            if (ent.status < 0) {
+              status = 0;
+              *perr = ent.status;
+              *pline = snparser_count(pr);
+            } else if (ent.status != SNENTITY_META_TOKEN) {
+              status = 0;
+              *perr = ERR_HEADS;
+              *pline = snparser_count(pr);
+            }
+            
+            /* Parse metacommand token as integer */
+            if (status) {
+              if (!parseInt(ent.pKey, &iv)) {
+                status = 0;
+                *perr = ERR_HEADS;
+                *pline = snparser_count(pr);
+              }
+            }
+            
+            /* Check integer range */
+            if (status) {
+              if ((iv < 1) || (iv > SPH_IMAGE_MAXDIM)) {
+                status = 0;
+                *perr = ERR_DIM;
+                *pline = snparser_count(pr);
+              }
+            }
+            
+            /* Store integer value into structure */
+            if (status && (i == 0)) {
+              psi->w = iv;
+            
+            } else if (status && (i == 1)) {
+              psi->h = iv;
+              
+            } else if (status) {
+              abort();  /* shouldn't happen */
+            }
+            
+            /* Leave loop if error */
+            if (!status) {
+              break;
+            }
+          }
+        }
+        
+      } else if (status && (strcmp(ent.pKey, "shade") == 0)) {
+        /* Shading mode metacommand; make sure not already used */
+        if (psi->shade != 0) {
+          status = 0;
+          *perr = ERR_HEADR;
+          *pline = snparser_count(pr);
+        }
+        
+        /* Read the shading type metatoken */
+        if (status) {
+          snparser_read(pr, &ent, pSrc);
+          if (ent.status < 0) {
+            status = 0;
+            *perr = ent.status;
+            *pline = snparser_count(pr);
+          
+          } else if (ent.status != SNENTITY_META_TOKEN) {
+            status = 0;
+            *perr = ERR_HEADS;
+            *pline = snparser_count(pr);
+          }
+        }
+        
+        /* Set the appropriate value */
+        if (status && (strcmp(ent.pKey, "vertex") == 0)) {
+          psi->shade = SHADE_INTER;
+        } else if (status && (strcmp(ent.pKey, "triangle") == 0)) {
+          psi->shade = SHADE_FLAT;
+        } else if (status) {
+          /* Unrecognized shading mode */
+          status = 0;
+          *perr = ERR_SHADE;
+          *pline = snparser_count(pr);
+        }
+        
+      } else if (status) {
+        /* Unrecognized metacommand */
+        status = 0;
+        *perr = ERR_HEADC;
+        *pline = snparser_count(pr);
+      }
+      
+      /* Metacommand should now end */
+      if (status) {
+        snparser_read(pr, &ent, pSrc);
+        if (ent.status < 0) {
+          status = 0;
+          *perr = ent.status;
+          *pline = snparser_count(pr);
+        
+        } else if (ent.status != SNENTITY_END_META) {
+          status = 0;
+          *perr = ERR_HEADC;
+          *pline = snparser_count(pr);
+        }
+      }
+      
+      /* Leave loop if error */
+      if (!status) {
+        break;
+      }
+    }
+    if (status && (ent.status < 0)) {
+      status = 0;
+      *perr = ent.status;
+      *pline = snparser_count(pr);
+    }
+  }
+  
+  /* We should have gotten the output dimensions and shading mode from
+   * the header metacommands */
+  if (status && ((psi->w < 1) || (psi->h < 1))) {
+    status = 0;
+    *perr = ERR_NODIM;
+  
+  } else if (status && (psi->shade == 0)) {
+    status = 0;
+    *perr = ERR_NOSHA;
+  }
+  
+  /* Clear the counter fields in the info structure */
+  if (status) {
+    psi->tcount = 0;
+    psi->vcount = 0;
+  }
+  
+  /* If we are successful, we should have just read the first token
+   * after the metacommand header; process this token and all following
+   * tokens until the EOF token, checking that there are no further
+   * metacommand tokens, and counting the number of triangle and vertex
+   * operations */
+  if (status) {
+    for( ; ent.status > 0; snparser_read(pr, &ent, pSrc)) {
+      
+      /* Check that this entity is not any metacommand type token */
+      if ((ent.status == SNENTITY_BEGIN_META) ||
+          (ent.status == SNENTITY_END_META) ||
+          (ent.status == SNENTITY_META_TOKEN) ||
+          (ent.status == SNENTITY_META_STRING)) {
+        status = 0;
+        *perr = ERR_STRAY;
+        *pline = snparser_count(pr);
+      }
+      
+      /* If this is an operation token, update counts */
+      if (status && (ent.status == SNENTITY_OPERATION)) {
+        if (strcmp(ent.pKey, "v") == 0) {
+          /* Found a vertex command, so update count */
+          if (psi->vcount < MAX_VERTEX) {
+            (psi->vcount)++;
+          } else {
+            status = 0;
+            *perr = ERR_MANYV;
+            *pline = snparser_count(pr);
+          }
+          
+        } else if (strcmp(ent.pKey, "t") == 0) {
+          /* Found a triangle command, so update count */
+          if (psi->tcount < MAX_TRIS) {
+            (psi->tcount)++;
+          } else {
+            status = 0;
+            *perr = ERR_MANYT;
+            *pline = snparser_count(pr);
+          }
+        }
+      }
+      
+      /* Leave loop if error */
+      if (!status) {
+        break;
+      }
+    }
+    if (status && (ent.status < 0)) {
+      status = 0;
+      *perr = ent.status;
+      *pline = snparser_count(pr);
+    }
+  }
+  
+  /* If we got here successfully, we just read the EOF token, so make
+   * sure nothing further in input file */
+  if (status) {
+    status = snsource_consume(pSrc);
+    if (status < 0) {
+      *perr = status;
+      *pline = snparser_count(pr);
+      status = 0;
+    } else if (status == 0) {
+      abort();  /* shouldn't happen */
+    }
+  }
+  
+  /* Adjust line number if necessary */
+  if ((*pline < 0) || (*pline >= LONG_MAX)) {
+    *pline = 0;
+  }
+  
+  /* Release parser if allocated */
+  snparser_free(pr);
+  pr = NULL;
+  
+  /* Clear info structure if failure */
+  if (!status) {
+    memset(psi, 0, sizeof(SCRIPT_INFO));
+  }
+  
+  /* Return status */
+  return status;
 }
 
 /*
@@ -208,6 +533,50 @@ static const char *errstr(int code) {
         pResult = "No error";
         break;
       
+      case ERR_NOSIG:
+        pResult = "Failed to read script signature";
+        break;
+      
+      case ERR_HEADC:
+        pResult = "Invalid header metacommand";
+        break;
+      
+      case ERR_HEADR:
+        pResult = "Repetition of header metacommand";
+        break;
+      
+      case ERR_HEADS:
+        pResult = "Header metacommand syntax error";
+        break;
+      
+      case ERR_DIM:
+        pResult = "Image output dimension out of range";
+        break;
+      
+      case ERR_SHADE:
+        pResult = "Unrecognized shading mode";
+        break;
+      
+      case ERR_NODIM:
+        pResult = "You must declare output dimensions in header";
+        break;
+      
+      case ERR_NOSHA:
+        pResult = "You must declare shading mode in header";
+        break;
+      
+      case ERR_STRAY:
+        pResult = "Stray metacommand after metacommand header";
+        break;
+      
+      case ERR_MANYV:
+        pResult = "Too many declared vertices";
+        break;
+      
+      case ERR_MANYT:
+        pResult = "Too many declared triangles";
+        break;
+      
       default:
         /* Unrecognized error code */
         pResult = "Unknown error";
@@ -216,6 +585,109 @@ static const char *errstr(int code) {
   
   /* Return the message */
   return pResult;
+}
+
+/*
+ * Parse the given string as a signed integer.
+ * 
+ * pstr is the string to parse.
+ * 
+ * pv points to the integer value to use to return the parsed numeric
+ * value if the function is successful.
+ * 
+ * In two's complement, this function will not successfully parse the
+ * least negative value.
+ * 
+ * Parameters:
+ * 
+ *   pstr - the string to parse
+ * 
+ *   pv - pointer to the return numeric value
+ * 
+ * Return:
+ * 
+ *   non-zero if successful, zero if failure
+ */
+static int parseInt(const char *pstr, int32_t *pv) {
+  
+  int negflag = 0;
+  int32_t result = 0;
+  int status = 1;
+  int32_t d = 0;
+  
+  /* Check parameters */
+  if ((pstr == NULL) || (pv == NULL)) {
+    abort();
+  }
+  
+  /* If first character is a sign character, set negflag appropriately
+   * and skip it */
+  if (*pstr == '+') {
+    negflag = 0;
+    pstr++;
+  } else if (*pstr == '-') {
+    negflag = 1;
+    pstr++;
+  } else {
+    negflag = 0;
+  }
+  
+  /* Make sure we have at least one digit */
+  if (*pstr == 0) {
+    status = 0;
+  }
+  
+  /* Parse all digits */
+  if (status) {
+    for( ; *pstr != 0; pstr++) {
+    
+      /* Make sure in range of digits */
+      if ((*pstr < '0') || (*pstr > '9')) {
+        status = 0;
+      }
+    
+      /* Get numeric value of digit */
+      if (status) {
+        d = (int32_t) (*pstr - '0');
+      }
+      
+      /* Multiply result by 10, watching for overflow */
+      if (status) {
+        if (result <= INT32_MAX / 10) {
+          result = result * 10;
+        } else {
+          status = 0; /* overflow */
+        }
+      }
+      
+      /* Add in digit value, watching for overflow */
+      if (status) {
+        if (result <= INT32_MAX - d) {
+          result = result + d;
+        } else {
+          status = 0; /* overflow */
+        }
+      }
+    
+      /* Leave loop if error */
+      if (!status) {
+        break;
+      }
+    }
+  }
+  
+  /* Invert result if negative mode */
+  if (status && negflag) {
+    result = -(result);
+  }
+  
+  /* Write result if successful */
+  if (status) {
+    *pv = result;
+  }
+  
+  /* Return status */
+  return status;
 }
 
 /*
