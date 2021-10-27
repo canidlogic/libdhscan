@@ -7,30 +7,46 @@ The Delilah Scanline Renderer (dhscan) is a simple but flexible scanline renderi
 The whole library is contained within the `dhscan.h` and `dhscan.c` source files.  To use the library, you create a `DHSCAN_RENDER` object.  This object requires the following information:
 
 - Output image dimensions in pixels
-- Buffer filled with triangles
-- Buffer filled with vertices
+- Shading mode
+- Total number of vertices
+- Total number of triangles
 - Accessor functions
-- Pixel size
-- Pixel copy function
-- Pixel mixer function
 
-The data in the triangle buffer and the data in the vertex buffer may have any format, providing that each triangle has the same size in bytes and each vertex has the same size in bytes.
+The shading mode is either _interpolated_, which means that each vertex has data associated with it, and the data is interpolated across each rendered triangle; or _flat_, which means that each triangle has data associated with it that is merely copied to each pixel that it occupies.
 
-The client provides the count of structures and the structure size in bytes for both buffers.  It then provides accessor functions, which are callbacks that are used to read information from structures in the buffer.  This architecture is similar to how the generic `qsort()` and `bsearch()` routines are implemented in the C standard library.
+The _accessor functions_ are callbacks provided by the client that allow the Delilah Scanline Renderer to access input and output information.  In both flat and interpolated shading mode, the following accessor functions are required:
 
-The accessor functions are as follows:
+- Read vertex indices from a triangle index
+- Read projected X and Y coordinates from a vertex index
+- Read Z coordinate from a vertex index
 
-- Read three vertex indices from a triangle
-- Read projected X and Y coordinates from a vertex
-- Read Z coordinate from a vertex
+The triangle index and vertex index are integers that are at least zero and less than the total number of triangles and the total number of vertices, respectively.  The client is responsible for maintaining the actual data structures.  The Delilah Scanline Renderer manipulates these data structures indirectly through the accessor functions with indices.
 
-The vertex indices are element offsets into the vertex buffer.  The projected X and Y coordinates must be integers, though they can be signed and have any value.  The X and Y coordinates must be in the proper coordinate space of the output image.  The Z coordinate is a floating-point value that is used to determine visibility when triangles overlap.  For 2D rendering applications with no significant overlap, the accessor function for the Z coordinate can just return a constant value.
+The projected X and Y coordinates must be integers, though they can be signed and have any value.  The X and Y coordinates must be in the proper coordinate space of the output image.  This means that Delilah Scanline Renderer is actually a 2D renderer, although it can also be used for 3D rendering if the client handles projecting vertex coordinates into 2D space and clipping.
 
-The pixel size is the size in bytes of each pixel structure in the output buffer.  Although it is called a "pixel," this structure does not need to encode a color.  Instead, a pixel copy function and a pixel mixer function are provided by the client.  The pixel copy function takes a buffer vertex structure as input and derives an encoded pixel structure from it.  The pixel mixer function two pixel structures as input along with an interpolation value, and then generates a new pixel structure that is linearly interpolated between the two given input structures.
+The Z coordinate is a floating-point value that is used to determine visibility when triangles overlap.  For 2D rendering applications with no significant overlap, the accessor function for the Z coordinate can just return a constant value.
 
-This open-ended definition of a "pixel" allows the Delilah Scanline Renderer to be used not just for rendering colors, but also for rendering any kind of data that can be linearly interpolated.
+### 1.1 Flat shading
 
-Once the `DHSCAN_RENDER` object is set up, it can render each scanline in top-to-bottom order.
+In flat shading mode, the following accessor function is also required:
+
+- Copy triangle index data to scanline pixel index
+
+When rendering a scanline, this function will be invoked to copy the data from a specific triangle to a specific pixel within the scanline.  The Delilah Scanline Renderer knows nothing about what this actual data is; it might be a color or it might be something else.
+
+### 1.2 Interpolated shading
+
+In interpolated shading mode, the client must maintain an array of _mixing registers_ for the Delilah Scanline Renderer.  The total number of mixing registers required in this array is determined by the constant `DHSCAN_REGCOUNT`.  The following accessor functions are then required in interpolated shading mode in addition to those described earlier:
+
+- Copy vertex index data to mixing register index
+- Copy mixing register index to scanline pixel index
+- Mixing function
+
+The mixing function takes a destination register index, two source register indices, and a floating-point value in range [0.0, 1.0].  The data in the two source registers should be linearly interpolated according to the floating-point value, and the result should then be written to the destination register.
+
+### 1.3 Summary
+
+The flexible accessor callback function architecture allows the Delilah Scanline Renderer to be independent from the specific definitions of vertices, triangles, and colors used by the clients.  It even allows the Delilah Scanline Renderer to be used in cases where color is not what is being rendered, but something else entirely is being used.
 
 For the details of how to do everything described in this overview, see the `dhscan.h` header file.
 
@@ -52,8 +68,14 @@ The test program has the following syntax:
 `[script]` is the path to a Shastina script that defines what will be rendered.  It is a [Shastina](http://www.purl.org/canidtech/r/shastina) dialect with the following format:
 
     %dhrender;
+
     %dim 1920 1080;
     # Render a 1920 x 1080 image
+
+    %shade vertex;
+    # Interpolated mode where vertices have RGB color
+    # Use %shade triangle; for flat shading
+    # In flat shading, triangles will have RGB color
 
     # Define three vertices
     # Parameter 1: X coordinate
@@ -64,12 +86,14 @@ The test program has the following syntax:
      0   20  9 {ff00ff} v
     37  800 -2 {888877} v
 
+    # Parameter 4 only present if %shade vertex;
     # Only signed integers and RGB colors in {} are supported!
 
     # Define a triangle
     # Each integer is vertex index
     # Zero is first vertex
     0 1 2 t
+    # If %shade triangle; then also RGB color fourth parameter
 
     |;
 
