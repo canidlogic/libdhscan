@@ -56,7 +56,7 @@ The `dhrender.c` program is provided, which is a test program that can render RG
 
 The `dhrender.c` program has the following dependencies.  __These dependencies are only from the test program, not for the Delilah Scanline Renderer!__
 
-1. [libshastina](http://www.purl.org/canidtech/r/shastina) version 0.9.2 beta or compatible.
+1. [libshastina](http://www.purl.org/canidtech/r/shastina) version 0.9.3 beta or compatible.
 2. [libsophistry](http://www.purl.org/canidtech/r/libsophistry) version 0.5.3 beta or compatible.
 
 The test program has the following syntax:
