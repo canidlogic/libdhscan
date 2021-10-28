@@ -41,6 +41,17 @@
 #define ERR_STRAY (9)   /* Stray metacommand after header */
 #define ERR_MANYV (10)  /* Too many vertices */
 #define ERR_MANYT (11)  /* Too many triangles */
+#define ERR_SYNC  (12)  /* Script changed between passes */
+#define ERR_ETYPE (13)  /* Unsupported entity type */
+#define ERR_BADOP (14)  /* Unsupported operation */
+#define ERR_STREM (15)  /* Data remaining on interpreter stack */
+#define ERR_UNDER (16)  /* Stack underflow */
+#define ERR_OVER  (17)  /* Stack overflow */
+#define ERR_SYNTX (18)  /* Operation syntax error */
+#define ERR_ZNEG  (19)  /* Negative Z coordinate */
+#define ERR_VIDX  (20)  /* Invalid vertex index */
+#define ERR_NUMRL (21)  /* Invalid integer literal */
+#define ERR_RGBL  (22)  /* Invalid RGB literal */
 
 /*
  * Shading mode constants.
@@ -51,10 +62,22 @@
 #define SHADE_INTER (2)   /* Interpolated shading */
 
 /*
+ * Interpreter stack types.
+ */
+#define NTYPE_UNDEF (0)   /* Nothing defined */
+#define NTYPE_INT   (1)   /* Integer */
+#define NTYPE_RGB   (2)   /* Packed RGB value */
+
+/*
  * Maximum number of vertices and triangles supported.
  */
 #define MAX_VERTEX (16384)
 #define MAX_TRIS   (16384)
+
+/*
+ * Maximum height of Shastina interpreter stack.
+ */
+#define MAX_ISTACK  (32)
 
 /*
  * Type declarations
@@ -106,6 +129,42 @@ typedef struct {
 } SCRIPT_INFO;
 
 /*
+ * Data type for elements on the interpreter stack.
+ */
+typedef struct {
+  
+  /*
+   * The type stored.
+   * 
+   * One of the NTYPE constants.
+   */
+  int ntype;
+  
+  /*
+   * Union storing the actual data.
+   */
+  union {
+    
+    /*
+     * Dummy data used for NTYPE_UNDEF.
+     */
+    int8_t dummy;
+    
+    /*
+     * Integer value for NTYPE_INT.
+     */
+    int32_t ival;
+    
+    /*
+     * Packed RGB value for NTYPE_RGB.
+     */
+    int32_t rgb;
+
+  } v;
+  
+} STACK_NODE;
+
+/*
  * Local data
  * ==========
  */
@@ -137,6 +196,7 @@ static int first_pass(
 static int second_pass(
     SNSOURCE * pSrc,
     int        shade,
+    int32_t    vcount,
     int      * perr,
     long     * pline);
 
@@ -198,7 +258,7 @@ static void begin_data(int32_t vcount, int32_t tcount) {
  */
 static int declare_vert(int32_t x, int32_t y, int32_t z, uint32_t c) {
   /* @@TODO: */
-  fprintf(stderr, "declare_vert %ld %ld %ld %l06x\n",
+  fprintf(stderr, "declare_vert %ld %ld %ld %06lx\n",
             (long) x, (long) y, (long) z, (long) c);
   return 1;
 }
@@ -238,7 +298,7 @@ static int declare_vert(int32_t x, int32_t y, int32_t z, uint32_t c) {
  */
 static int declare_tri(int32_t i, int32_t j, int32_t k, uint32_t c) {
   /* @@TODO: */
-  fprintf(stderr, "declare_tri %ld %ld %ld %l06x\n",
+  fprintf(stderr, "declare_tri %ld %ld %ld %06lx\n",
             (long) i, (long) j, (long) k, (long) c);
   return 1;
 }
@@ -652,6 +712,10 @@ static int first_pass(
  * shade must be one of the SHADE_ constants.  It determines whether v
  * or t operations take an RGB color.
  * 
+ * vcount is the total number of vertices.  It is used within this
+ * function only for checking the range of parameters to the triangle
+ * operation.
+ * 
  * If successful, *perr will be set to ERR_OK (zero), *pline will be set
  * to zero, and a non-zero value will be returned.
  * 
@@ -666,6 +730,8 @@ static int first_pass(
  * 
  *   shade - the shading mode
  * 
+ *   vcount - the total number of vertices
+ * 
  *   perr - pointer to variable to receive error code
  * 
  *   pline - pointer to variable to receive line number
@@ -677,10 +743,437 @@ static int first_pass(
 static int second_pass(
     SNSOURCE * pSrc,
     int        shade,
+    int32_t    vcount,
     int      * perr,
     long     * pline) {
-  /* @@TODO: */
-  return 1;
+  
+  int status = 1;
+  int i = 0;
+  int st_count = 0;
+  int32_t iv = 0;
+  long cv = 0;
+  SNPARSER *pr = NULL;
+  const char *pc = NULL;
+  
+  SNENTITY ent;
+  STACK_NODE st[MAX_ISTACK];
+  
+  /* Initialize structures */
+  memset(&ent, 0, sizeof(SNENTITY));
+  memset(st, 0, sizeof(STACK_NODE) * MAX_ISTACK);
+  for(i = 0; i < MAX_ISTACK; i++) {
+    st[i].ntype = NTYPE_UNDEF;
+    st[i].v.dummy = (int8_t) 0;
+  }
+  
+  /* Check parameters */
+  if ((pSrc == NULL) || (perr == NULL) || (pline == NULL)) {
+    abort();
+  }
+  if ((shade != SHADE_FLAT) && (shade != SHADE_INTER)) {
+    abort();
+  }
+  
+  /* Reset error information */
+  *perr = ERR_OK;
+  *pline = 0;
+  
+  /* Allocate a parser */
+  pr = snparser_alloc();
+  
+  /* Read through all entities */
+  for(snparser_read(pr, &ent, pSrc);
+      ent.status > 0;
+      snparser_read(pr, &ent, pSrc)) {
+    
+    /* Skip any metacommand entities */
+    if ((ent.status == SNENTITY_BEGIN_META) ||
+        (ent.status == SNENTITY_END_META) ||
+        (ent.status == SNENTITY_META_TOKEN) ||
+        (ent.status == SNENTITY_META_STRING)) {
+      continue;
+    }
+    
+    /* Handle entity types */
+    if (ent.status == SNENTITY_STRING) {
+      /* String entity -- only curly entities with no prefix are
+       * supported */
+      if ((ent.str_type != SNSTRING_CURLY) || (strlen(ent.pKey) != 0)) {
+        status = 0;
+        *perr = ERR_ETYPE;
+        *pline = snparser_count(pr);
+      }
+      
+      /* There should be room for another element on the stack */
+      if (status) {
+        if (st_count >= MAX_ISTACK) {
+          status = 0;
+          *perr = ERR_OVER;
+          *pline = snparser_count(pr);
+        }
+      }
+      
+      /* Make sure string value has exactly six characters */
+      if (status) {
+        if (strlen(ent.pValue) != 6) {
+          status = 0;
+          *perr = ERR_RGBL;
+          *pline = snparser_count(pr);
+        }
+      }
+      
+      /* Make sure each character is a base-16 digit */
+      if (status) {
+        for(pc = ent.pValue; *pc != 0; pc++) {
+          if (((*pc < '0') || (*pc > '9')) &&
+              ((*pc < 'A') || (*pc > 'F')) &&
+              ((*pc < 'a') || (*pc > 'f'))) {
+            status = 0;
+            *perr = ERR_RGBL;
+            *pline = snparser_count(pr);
+            break;
+          }
+        }
+      }
+      
+      /* Get the color value */
+      if (status) {
+        if (sscanf(ent.pValue, "%lx", &cv) != 1) {
+          /* Shouldn't happen because we checked the format */
+          abort();
+        }
+        if ((cv < 0) || (cv > 0xffffffL)) {
+          /* Should happen because we checked the format */
+          abort();
+        }
+      }
+      
+      /* Push the RGB color onto the stack */
+      if (status) {
+        st[st_count].ntype = NTYPE_RGB;
+        st[st_count].v.rgb = (uint32_t) cv;
+        st_count++;
+      }
+      
+    } else if (ent.status == SNENTITY_NUMERIC) {
+      /* Numeric entity, so there should be room for another element on
+       * the stack */
+      if (st_count >= MAX_ISTACK) {
+        status = 0;
+        *perr = ERR_OVER;
+        *pline = snparser_count(pr);
+      }
+      
+      /* Parse the numeric entity as an integer */
+      if (status) {
+        if (!parseInt(ent.pKey, &iv)) {
+          status = 0;
+          *perr = ERR_NUMRL;
+          *pline = snparser_count(pr);
+        }
+      }
+      
+      /* Push the integer onto the stack */
+      if (status) {
+        st[st_count].ntype = NTYPE_INT;
+        st[st_count].v.ival = iv;
+        st_count++;
+      }
+      
+    } else if (ent.status == SNENTITY_OPERATION) {
+      /* Handle operation types */
+      if (strcmp(ent.pKey, "v") == 0) {
+        if (shade == SHADE_INTER) {
+          /* Vertex operation in interpolated shading, so there should
+           * be at least four parameters on stack */
+          if (st_count < 4) {
+            status = 0;
+            *perr = ERR_UNDER;
+            *pline = snparser_count(pr);
+          }
+          
+          /* Get base offset of parameters */
+          if (status) {
+            i = st_count - 4;
+          }
+          
+          /* Check parameter types */
+          if (status) {
+            if ((st[i    ].ntype != NTYPE_INT) ||
+                (st[i + 1].ntype != NTYPE_INT) ||
+                (st[i + 2].ntype != NTYPE_INT) ||
+                (st[i + 3].ntype != NTYPE_RGB)) {
+              status = 0;
+              *perr = ERR_SYNTX;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Check Z coordinate range */
+          if (status) {
+            if (st[i + 2].v.ival < 0) {
+              status = 0;
+              *perr = ERR_ZNEG;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Declare the vertex */
+          if (status) {
+            if (!declare_vert(
+                    st[i    ].v.ival,
+                    st[i + 1].v.ival,
+                    st[i + 2].v.ival,
+                    st[i + 3].v.rgb)) {
+              status = 0;
+              *perr = ERR_SYNC;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Pop parameters off stack */
+          if (status) {
+            for(i = 0; i < 4; i ++) {
+              st_count--;
+              st[st_count].ntype = NTYPE_UNDEF;
+              st[st_count].v.dummy = (int8_t) 0;
+            }
+          }
+        
+        } else if (shade == SHADE_FLAT) {
+          /* Vertex operation in flat shading, so there should be at
+           * least three parameters on stack */
+          if (st_count < 3) {
+            status = 0;
+            *perr = ERR_UNDER;
+            *pline = snparser_count(pr);
+          }
+          
+          /* Get base offset of parameters */
+          if (status) {
+            i = st_count - 3;
+          }
+          
+          /* Check parameter types */
+          if (status) {
+            if ((st[i    ].ntype != NTYPE_INT) ||
+                (st[i + 1].ntype != NTYPE_INT) ||
+                (st[i + 2].ntype != NTYPE_INT)) {
+              status = 0;
+              *perr = ERR_SYNTX;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Check Z coordinate range */
+          if (status) {
+            if (st[i + 2].v.ival < 0) {
+              status = 0;
+              *perr = ERR_ZNEG;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Declare the vertex */
+          if (status) {
+            if (!declare_vert(
+                    st[i    ].v.ival,
+                    st[i + 1].v.ival,
+                    st[i + 2].v.ival,
+                    0)) {
+              status = 0;
+              *perr = ERR_SYNC;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Pop parameters off stack */
+          if (status) {
+            for(i = 0; i < 3; i ++) {
+              st_count--;
+              st[st_count].ntype = NTYPE_UNDEF;
+              st[st_count].v.dummy = (int8_t) 0;
+            }
+          }
+          
+        } else {
+          abort();  /* shouldn't happen */
+        }
+        
+      } else if (strcmp(ent.pKey, "t") == 0) {
+        if (shade == SHADE_FLAT) {
+          /* Triangle operation in flat shading, so there should be at
+           * least four parameters on stack */
+          if (st_count < 4) {
+            status = 0;
+            *perr = ERR_UNDER;
+            *pline = snparser_count(pr);
+          }
+          
+          /* Get base offset of parameters */
+          if (status) {
+            i = st_count - 4;
+          }
+          
+          /* Check parameter types */
+          if (status) {
+            if ((st[i    ].ntype != NTYPE_INT) ||
+                (st[i + 1].ntype != NTYPE_INT) ||
+                (st[i + 2].ntype != NTYPE_INT) ||
+                (st[i + 3].ntype != NTYPE_RGB)) {
+              status = 0;
+              *perr = ERR_SYNTX;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Check operator parameter ranges */
+          if (status) {
+            if ((st[i].v.ival < 0) || (st[i].v.ival >= vcount) ||
+               (st[i + 1].v.ival < 0) || (st[i + 1].v.ival >= vcount) ||
+               (st[i + 2].v.ival < 0) || (st[i + 2].v.ival >= vcount)) {
+              status = 0;
+              *perr = ERR_VIDX;
+              *pline = snparser_count(pr);
+            }
+          }
+        
+          /* Declare the triangle */
+          if (status) {
+            if (!declare_tri(
+                    st[i    ].v.ival,
+                    st[i + 1].v.ival,
+                    st[i + 2].v.ival,
+                    st[i + 3].v.rgb)) {
+              status = 0;
+              *perr = ERR_SYNC;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Pop parameters off stack */
+          if (status) {
+            for(i = 0; i < 4; i ++) {
+              st_count--;
+              st[st_count].ntype = NTYPE_UNDEF;
+              st[st_count].v.dummy = (int8_t) 0;
+            }
+          }
+        
+        } else if (shade == SHADE_INTER) {
+          /* Triangle operation in interpolated shading, so there should
+           * be at least three parameters on stack */
+          if (st_count < 3) {
+            status = 0;
+            *perr = ERR_UNDER;
+            *pline = snparser_count(pr);
+          }
+          
+          /* Get base offset of parameters */
+          if (status) {
+            i = st_count - 3;
+          }
+          
+          /* Check parameter types */
+          if (status) {
+            if ((st[i    ].ntype != NTYPE_INT) ||
+                (st[i + 1].ntype != NTYPE_INT) ||
+                (st[i + 2].ntype != NTYPE_INT)) {
+              status = 0;
+              *perr = ERR_SYNTX;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Check operator parameter ranges */
+          if (status) {
+            if ((st[i].v.ival < 0) || (st[i].v.ival >= vcount) ||
+               (st[i + 1].v.ival < 0) || (st[i + 1].v.ival >= vcount) ||
+               (st[i + 2].v.ival < 0) || (st[i + 2].v.ival >= vcount)) {
+              status = 0;
+              *perr = ERR_VIDX;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Declare the triangle */
+          if (status) {
+            if (!declare_tri(
+                    st[i    ].v.ival,
+                    st[i + 1].v.ival,
+                    st[i + 2].v.ival,
+                    0)) {
+              status = 0;
+              *perr = ERR_SYNC;
+              *pline = snparser_count(pr);
+            }
+          }
+          
+          /* Pop parameters off stack */
+          if (status) {
+            for(i = 0; i < 3; i ++) {
+              st_count--;
+              st[st_count].ntype = NTYPE_UNDEF;
+              st[st_count].v.dummy = (int8_t) 0;
+            }
+          }
+          
+        } else {
+          abort();  /* shouldn't happen */
+        }
+        
+      } else {
+        /* Unsupported operation */
+        status = 0;
+        *perr = ERR_BADOP;
+        *pline = snparser_count(pr);
+      }
+      
+    } else {
+      /* Unsupported entity type */
+      status = 0;
+      *perr = ERR_ETYPE;
+      *pline = snparser_count(pr);
+    }
+    
+    /* Leave loop if error */
+    if (!status) {
+      break;
+    }
+  }
+  if (status && (ent.status < 0)) {
+    status = 0;
+    *perr = ent.status;
+    *pline = snparser_count(pr);
+  }
+  
+  /* Check that we've read all needed vertices and triangles */
+  if (status) {
+    if (!check_decl()) {
+      status = 0;
+      *perr = ERR_SYNC;
+    }
+  }
+  
+  /* Check that interpreter stack is empty */
+  if (status) {
+    if (st_count != 0) {
+      status = 0;
+      *perr = ERR_STREM;
+    }
+  }
+  
+  /* Free parser if allocated */
+  snparser_free(pr);
+  pr = NULL;
+  
+  /* Fix line number if necessary */
+  if ((*pline < 0) || (*pline >= LONG_MAX)) {
+    *pline = 0;
+  }
+  
+  /* Return status */
+  return status;
 }
 
 /*
@@ -760,6 +1253,50 @@ static const char *errstr(int code) {
       
       case ERR_MANYT:
         pResult = "Too many declared triangles";
+        break;
+      
+      case ERR_SYNC:
+        pResult = "Script changed between passes";
+        break;
+      
+      case ERR_ETYPE:
+        pResult = "Unsupported Shastina entity type";
+        break;
+      
+      case ERR_BADOP:
+        pResult = "Unsupported operation";
+        break;
+      
+      case ERR_STREM:
+        pResult = "Data remaining on interpreter stack";
+        break;
+      
+      case ERR_UNDER:
+        pResult = "Stack underflow";
+        break;
+      
+      case ERR_OVER:
+        pResult = "Stack overflow";
+        break;
+      
+      case ERR_SYNTX:
+        pResult = "Operation syntax error";
+        break;
+      
+      case ERR_ZNEG:
+        pResult = "Negative Z coordinate";
+        break;
+      
+      case ERR_VIDX:
+        pResult = "Invalid vertex index";
+        break;
+      
+      case ERR_NUMRL:
+        pResult = "Invalid integer literal";
+        break;
+      
+      case ERR_RGBL:
+        pResult = "Invalid RGB literal";
         break;
       
       default:
@@ -979,7 +1516,7 @@ int main(int argc, char *argv[]) {
   
   /* Run the second pass to fill the internal data structures */
   if (status) {
-    if (!second_pass(pScriptSrc, si.shade, &ecode, &lnum)) {
+    if (!second_pass(pScriptSrc, si.shade, si.vcount, &ecode, &lnum)) {
       /* Second pass failed */
       if (lnum > 0) {
         fprintf(stderr, "%s: [Line %ld] %s!\n",
