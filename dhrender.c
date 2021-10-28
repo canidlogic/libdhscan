@@ -134,6 +134,12 @@ static int first_pass(
     int         * perr,
     long        * pline);
 
+static int second_pass(
+    SNSOURCE * pSrc,
+    int        shade,
+    int      * perr,
+    long     * pline);
+
 static const char *errstr(int code);
 static int parseInt(const char *pstr, int32_t *pv);
 
@@ -626,6 +632,58 @@ static int first_pass(
 }
 
 /*
+ * Run the second pass on the Shastina script.
+ * 
+ * The second pass will ignore any entities that pertain to
+ * metacommands, since the first pass handled those.  The second pass
+ * will also stop processing at the EOF marker, since the first pass
+ * handled checking for trailing data.
+ * 
+ * You must call begin_data() before calling this function.  This
+ * function will interpret the script and declare any vertices and
+ * triangles within using the declare_tri() and declare_vert()
+ * functions.  At the end of interpretation, this function will check
+ * that check_decl() passes.
+ * 
+ * pSrc is the source to read the Shastina script from.  Reading in this
+ * function is fully sequential.  Remember to rewind the source first if
+ * you just used it in first_pass().
+ * 
+ * shade must be one of the SHADE_ constants.  It determines whether v
+ * or t operations take an RGB color.
+ * 
+ * If successful, *perr will be set to ERR_OK (zero), *pline will be set
+ * to zero, and a non-zero value will be returned.
+ * 
+ * If there is an error, *perr will have an error code that can be
+ * converted into a message with errstr(), *pline will be greater than
+ * zero if the error occurred on a specific line within the script, else
+ * zero if there is no specific error number.
+ * 
+ * Parameters:
+ * 
+ *   pSrc - the input source to read the script from
+ * 
+ *   shade - the shading mode
+ * 
+ *   perr - pointer to variable to receive error code
+ * 
+ *   pline - pointer to variable to receive line number
+ * 
+ * Return:
+ * 
+ *   non-zero if successful, zero if error
+ */
+static int second_pass(
+    SNSOURCE * pSrc,
+    int        shade,
+    int      * perr,
+    long     * pline) {
+  /* @@TODO: */
+  return 1;
+}
+
+/*
  * Get an error message from an error code.
  * 
  * The error message begins with an uppercase letter but does not have
@@ -905,14 +963,49 @@ int main(int argc, char *argv[]) {
     }
   }
   
-  /* @@TODO: */
+  /* Rewind the input source */
   if (status) {
-    printf("Width:  %ld\n", (long) si.w);
-    printf("Height: %ld\n", (long) si.h);
-    printf("Shade:  %d\n", si.shade);
-    printf("Tcount: %ld\n", (long) si.tcount);
-    printf("Vcount: %ld\n", (long) si.vcount);
+    if (!snsource_rewind(pScriptSrc)) {
+      fprintf(stderr, "%s: I/O error rewinding script source!\n",
+                pModule);
+      status = 0;
+    }
   }
+  
+  /* Get the internal data structures ready */
+  if (status) {
+    begin_data(si.vcount, si.tcount);
+  }
+  
+  /* Run the second pass to fill the internal data structures */
+  if (status) {
+    if (!second_pass(pScriptSrc, si.shade, &ecode, &lnum)) {
+      /* Second pass failed */
+      if (lnum > 0) {
+        fprintf(stderr, "%s: [Line %ld] %s!\n",
+                  pModule, lnum, errstr(ecode));
+      } else {
+        fprintf(stderr, "%s: %s!\n",
+                  pModule, errstr(ecode));
+      }
+      status = 0;
+    }
+  }
+  
+  /* Internal data structures should be all ready if we got here */
+  if (status) {
+    if (!check_decl()) {
+      abort();
+    }
+  }
+  
+  /* Done with the script, so we can close the source and the file */
+  if (status) {
+    snsource_free(pScriptSrc);
+    pScriptSrc = NULL;
+  }
+  
+  /* @@TODO: */
   
   /* Close script file handle if open */
   if (fhScript != NULL) {
