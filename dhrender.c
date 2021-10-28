@@ -165,6 +165,33 @@ typedef struct {
 } STACK_NODE;
 
 /*
+ * Unified data structure for both a vertex and a triangle.
+ */
+typedef struct {
+  
+  /*
+   * The first integer coordinate.
+   */
+  int32_t a;
+  
+  /*
+   * The second integer coordinate.
+   */
+  int32_t b;
+  
+  /*
+   * The third integer coordinate.
+   */
+  int32_t c;
+  
+  /*
+   * The unsigned color value.
+   */
+  uint32_t u;
+  
+} VT_DATA;
+
+/*
  * Local data
  * ==========
  */
@@ -175,6 +202,40 @@ typedef struct {
  * This will be set at the start of the program entrypoint.
  */
 static const char *pModule = NULL;
+
+/*
+ * The internal data structures.
+ * 
+ * m_init is non-zero after begin_data() has been called to set up the
+ * data structures.
+ * 
+ * m_vcount and m_tcount store the number of vertices and triangles,
+ * respectively, that will be declared.  This is only valid after m_init
+ * is non-zero.
+ * 
+ * m_vwrite and m_twrite store the number of vertices and triangles that
+ * have actually been declared so far.  This is only valid after m_init
+ * is non-zero.
+ * 
+ * m_ready is set to non-zero after check_decl() returns a non-zero
+ * value for the first time.
+ * 
+ * m_pv is the pointer to the vertex data.  m_pt is the pointer to the
+ * triangle data.  Both only valid after m_init is non-zero.  They will
+ * be NULL if they are empty.
+ */
+static int m_init = 0;
+
+static int32_t m_vcount = 0;
+static int32_t m_tcount = 0;
+
+static int32_t m_vwrite = 0;
+static int32_t m_twrite = 0;
+
+static int m_ready = 0;
+
+static VT_DATA *m_pv = NULL;
+static VT_DATA *m_pt = NULL;
 
 /*
  * Local functions
@@ -223,8 +284,46 @@ static int parseInt(const char *pstr, int32_t *pv);
  *   tcount - the number of triangles that will be declared
  */
 static void begin_data(int32_t vcount, int32_t tcount) {
-  /* @@TODO: */
-  fprintf(stderr, "begin_data %ld %ld\n", (long) vcount, (long) tcount);
+  
+  /* Check state */
+  if (m_init) {
+    abort();
+  }
+  
+  /* Check parameters */
+  if ((vcount < 0) || (vcount > MAX_VERTEX) ||
+      (tcount < 0) || (tcount > MAX_TRIS)) {
+    abort();
+  }
+  
+  /* Initialize internal data state */
+  m_init = 1;
+  
+  m_vcount = vcount;
+  m_tcount = tcount;
+  
+  m_vwrite = 0;
+  m_twrite = 0;
+  
+  m_ready = 0;
+  
+  if (vcount > 0) {
+    m_pv = (VT_DATA *) calloc((size_t) vcount, sizeof(VT_DATA));
+    if (m_pv == NULL) {
+      abort();
+    }
+  } else {
+    m_pv = NULL;
+  }
+  
+  if (tcount > 0) {
+    m_pt = (VT_DATA *) calloc((size_t) tcount, sizeof(VT_DATA));
+    if (m_pt == NULL) {
+      abort();
+    }
+  } else {
+    m_pt = NULL;
+  }
 }
 
 /*
@@ -257,10 +356,38 @@ static void begin_data(int32_t vcount, int32_t tcount) {
  *   declared
  */
 static int declare_vert(int32_t x, int32_t y, int32_t z, uint32_t c) {
-  /* @@TODO: */
-  fprintf(stderr, "declare_vert %ld %ld %ld %06lx\n",
-            (long) x, (long) y, (long) z, (long) c);
-  return 1;
+  
+  int result = 0;
+  
+  /* Check state */
+  if (!m_init) {
+    abort();
+  }
+  
+  /* Check parameters */
+  if ((z < 0) || (c < 0) || (c > UINT32_C(0xffffff))) {
+    abort();
+  }
+  
+  /* Check whether we have room for another declaration */
+  if (m_vwrite < m_vcount) {
+    /* We have room, so store data */
+    m_pv[m_vwrite].a = x;
+    m_pv[m_vwrite].b = y;
+    m_pv[m_vwrite].c = z;
+    m_pv[m_vwrite].u = c;
+    
+    /* Increase count and set result */
+    m_vwrite++;
+    result = 1;
+    
+  } else {
+    /* No more room */
+    result = 0;
+  }
+  
+  /* Return result */
+  return result;
 }
 
 /*
@@ -297,10 +424,41 @@ static int declare_vert(int32_t x, int32_t y, int32_t z, uint32_t c) {
  *   declared
  */
 static int declare_tri(int32_t i, int32_t j, int32_t k, uint32_t c) {
-  /* @@TODO: */
-  fprintf(stderr, "declare_tri %ld %ld %ld %06lx\n",
-            (long) i, (long) j, (long) k, (long) c);
-  return 1;
+  
+  int result = 0;
+  
+  /* Check state */
+  if (!m_init) {
+    abort();
+  }
+  
+  /* Check parameters */
+  if ((i < 0) || (i >= m_vcount) ||
+      (j < 0) || (j >= m_vcount) ||
+      (k < 0) || (k >= m_vcount) ||
+      (c < 0) || (c > UINT32_C(0xffffff))) {
+    abort();
+  }
+  
+  /* Check whether we have room for another declaration */
+  if (m_twrite < m_tcount) {
+    /* We have room, so store data */
+    m_pt[m_twrite].a = i;
+    m_pt[m_twrite].b = j;
+    m_pt[m_twrite].c = k;
+    m_pt[m_twrite].u = c;
+    
+    /* Increase count and set result */
+    m_twrite++;
+    result = 1;
+    
+  } else {
+    /* No more room */
+    result = 0;
+  }
+  
+  /* Return result */
+  return result;
 }
 
 /*
@@ -321,8 +479,31 @@ static int declare_tri(int32_t i, int32_t j, int32_t k, uint32_t c) {
  *   not
  */
 static int check_decl(void) {
-  /* @@TODO: */
-  return 1;
+  
+  int result = 0;
+  
+  /* First, check if result cached */
+  if (m_ready) {
+    /* Cached result of yes */
+    result = 1;
+    
+  } else {
+    /* No cached result, so check whether begin_data called first */
+    if (m_init) {
+      /* Next, check if all vertices declared */
+      if (m_vwrite >= m_vcount) {
+        /* Next, check if all triangles declared */
+        if (m_twrite >= m_tcount) {
+          /* Everything is ready, so set result and cache */
+          result = 1;
+          m_ready = 1;
+        }
+      }
+    }
+  }
+  
+  /* Return result */
+  return result;
 }
 
 /*
