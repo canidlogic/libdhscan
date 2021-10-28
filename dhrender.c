@@ -123,6 +123,11 @@ static const char *pModule = NULL;
  */
 
 /* Prototypes */
+static void begin_data(int32_t vcount, int32_t tcount);
+static int declare_vert(int32_t x, int32_t y, int32_t z, uint32_t c);
+static int declare_tri(int32_t i, int32_t j, int32_t k, uint32_t c);
+static int check_decl(void);
+
 static int first_pass(
     SNSOURCE    * pSrc,
     SCRIPT_INFO * psi,
@@ -131,6 +136,128 @@ static int first_pass(
 
 static const char *errstr(int code);
 static int parseInt(const char *pstr, int32_t *pv);
+
+/*
+ * Initialize internal data structures so that they are ready to accept
+ * vertex and triangle declarations.
+ * 
+ * You must determine the exact number of vertices and triangles before
+ * calling this function.  Use first_pass() to get this information.
+ * 
+ * This function can only be called once.  A fault occurs if it is
+ * called more than once.
+ * 
+ * The vertex count must be in range [0, MAX_VERTEX] and the triangle
+ * count must be in range [0, MAX_TRIS].
+ * 
+ * Parameters:
+ * 
+ *   vcount - the number of vertices that will be declared
+ * 
+ *   tcount - the number of triangles that will be declared
+ */
+static void begin_data(int32_t vcount, int32_t tcount) {
+  /* @@TODO: */
+  fprintf(stderr, "begin_data %ld %ld\n", (long) vcount, (long) tcount);
+}
+
+/*
+ * Declare a vertex.
+ * 
+ * You must call begin_data() before this function.  This function must
+ * then be called exactly as many times as the vcount value given to
+ * begin_data(), to declare each vertex.  Declaration order is
+ * significant, as it determines the vertex index.
+ * 
+ * The X and Y coordinates can have any value.  The Z coordinate must be
+ * zero or greater.  The color c must be in range [0, 0xffffff].
+ * 
+ * If flat shading mode is being used, the vertex color does not matter
+ * and can be set to zero.
+ * 
+ * Parameters:
+ * 
+ *   x - the X coordinate of the vertex
+ * 
+ *   y - the Y coordinate of the vertex
+ * 
+ *   z - the Z coordinate of the vertex
+ * 
+ *   c - the packed RGB color of the vertex
+ * 
+ * Return:
+ * 
+ *   non-zero if successful, zero if too many vertices are being
+ *   declared
+ */
+static int declare_vert(int32_t x, int32_t y, int32_t z, uint32_t c) {
+  /* @@TODO: */
+  fprintf(stderr, "declare_vert %ld %ld %ld %l06x\n",
+            (long) x, (long) y, (long) z, (long) c);
+  return 1;
+}
+
+/*
+ * Declare a triangle.
+ * 
+ * You must call begin_data() before this function.  This function must
+ * then be called exactly as many times as the tcount value given to
+ * begin_data(), to declare each triangle.  Declaration order is
+ * significant, as it determines the triangle index.
+ * 
+ * The i, j, and k values are indices into the vertex array that 
+ * determine the vertices of the triangle.  The must all have values
+ * that are zero or greater, and less than the vcount value given to
+ * begin_data().  The referenced vertices do NOT need to be declared
+ * before using them in a triangle.
+ * 
+ * The color c must be in range [0, 0xffffff].  If interpolated shading
+ * mode is being used, the triangle color does not matter and can be set
+ * to zero.
+ * 
+ * Parameters:
+ * 
+ *   i - the index of the first vertex
+ * 
+ *   j - the index of the second vertex
+ * 
+ *   k - the index of the third vertex
+ * 
+ *   c - the packed RGB color of the triangle
+ * 
+ * Return:
+ * 
+ *   non-zero if successful, zero if too many triangles are being
+ *   declared
+ */
+static int declare_tri(int32_t i, int32_t j, int32_t k, uint32_t c) {
+  /* @@TODO: */
+  fprintf(stderr, "declare_tri %ld %ld %ld %l06x\n",
+            (long) i, (long) j, (long) k, (long) c);
+  return 1;
+}
+
+/*
+ * Check whether all necessary vertex and triangle declarations have
+ * been made.
+ * 
+ * This returns non-zero only if:
+ * 
+ *   1) begin_data(vcount, tcount) has been called
+ *   2) declare_vert() has been called vcount times
+ *   3) declare_tri() has been called tcount times
+ * 
+ * In all other cases, the function returns zero.
+ * 
+ * Return:
+ * 
+ *   non-zero if all triangles and vertices have been declared, zero if
+ *   not
+ */
+static int check_decl(void) {
+  /* @@TODO: */
+  return 1;
+}
 
 /*
  * Run the first pass on the Shastina script.
