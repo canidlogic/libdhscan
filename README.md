@@ -84,9 +84,9 @@ The test program has the following syntax:
     # Parameter 2: Y coordinate
     # Parameter 3: Z coordinate
     # Parameter 4: RGB color as six base-16 digits in {}
-    -10 257  5 {6d7800} v
-     0   20  9 {ff00ff} v
-    37  800 -2 {888877} v
+    -10 257 5 {6d7800} v
+     0   20 9 {ff00ff} v
+    37  800 2 {888877} v
 
     # Parameter 4 only present if %shade vertex;
     # Only signed integers and RGB colors in {} are supported!
