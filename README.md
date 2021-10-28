@@ -82,7 +82,7 @@ The test program has the following syntax:
     # Define three vertices
     # Parameter 1: X coordinate
     # Parameter 2: Y coordinate
-    # Parameter 3: Z coordinate
+    # Parameter 3: Z coordinate, must be zero or greater
     # Parameter 4: RGB color as six base-16 digits in {}
     -10 257 5 {6d7800} v
      0   20 9 {ff00ff} v
