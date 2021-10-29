@@ -97,6 +97,9 @@ typedef struct {
  * the X, Y, and Z coordinates of the requested vertex into the given
  * DHSCAN_VERTEX structure.  See the documentation of that structure for
  * further information.
+ * 
+ * Triangle vertices should not change during rendering or undefined
+ * behavior occurs.
  */
 typedef void (*dhscan_fp_vertex)(void *, int32_t, int, DHSCAN_VERTEX *);
 
@@ -118,6 +121,9 @@ typedef void (*dhscan_fp_vertex)(void *, int32_t, int, DHSCAN_VERTEX *);
  * 
  * This function allows the client to determine which shading mode is
  * used for each specific triangle.
+ * 
+ * Shading modes for specific triangles should not change during
+ * rendering or undefined behavior occurs.
  */
 typedef int (*dhscan_fp_mode)(void *, int32_t);
 
@@ -143,24 +149,19 @@ typedef void (*dhscan_fp_clear)(void *);
  * scanline buffer.  This is always in the range [0, width - 1] where
  * width is the width in pixels of the output image.
  * 
- * The second int32_t parameter is the number of pixels in the scanline
- * buffer that will be shaded.  This is always in the range [1, width],
- * and furthermore the first parameter added to the second parameter is
- * always less than or equal to output image width.
- * 
- * The third int32_t parameter is the source triangle index.  It will
+ * The second int32_t parameter is the source triangle index.  It will
  * be at least zero and less than the total number of triangles.
  * 
  * When this function is called, the client should determine the flat
  * shading "color" of the indicated triangle and then copy that "color"
- * to the indicated pixel(s) within the scanline buffer, overwriting any
+ * to the indicated pixel within the scanline buffer, overwriting any
  * "color" that is currently there.
  * 
  * (The word "color" is in scare quotes because the Delilah Scanline
  * Renderer is not limited to rendering colors, and the client might
  * have some other type of data to render.)
  */
-typedef void (*dhscan_fp_flat)(void *, int32_t, int32_t, int32_t);
+typedef void (*dhscan_fp_flat)(void *, int32_t, int32_t);
 
 /*
  * Function pointer type for vertex shading load accessor function.
