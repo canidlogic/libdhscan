@@ -7,22 +7,27 @@ The Delilah Scanline Renderer (dhscan) is a simple but flexible scanline renderi
 The whole library is contained within the `dhscan.h` and `dhscan.c` source files.  To use the library, you create a `DHSCAN_RENDER` object.  This object requires the following information:
 
 - Output image dimensions in pixels
-- Shading mode
 - Total number of triangles
 - Accessor functions
 
-The shading mode is either _interpolated_, which means that each triangle vertex has data associated with it which is interpolated across the triangle surface, or _flat_, which means that each triangle has data associated with it that is merely copied to each pixel that it occupies.
+The _accessor functions_ are callbacks provided by the client that allow the Delilah Scanline Renderer to access input and output information.  The following accessor functions are required:
 
-The _accessor functions_ are callbacks provided by the client that allow the Delilah Scanline Renderer to access input and output information.  In both flat and interpolated shading mode, the following accessor functions are required:
-
-- Read projected X and Y coordinates from a triangle vertex
-- Read Z coordinate from a triangle vertex
+- Read X, Y, Z coordinates from a triangle vertex
+- Determine shading mode of a specific triangle
+- Clear scanline buffer
 
 Triangles are accessed as an integer index that is greater than or equal to zero and less than the total number of triangles that was passed as a parameter to the Delilah Scanline Renderer.  The order of the triangles does not matter.  Triangle vertices are accessed as an index in range [0, 2] for a specific triangle.  The order of triangle vertices does not matter.  It is left up to the client to manage the actual data structures, which gives the client flexibility to decide how the data is structured.
 
-The projected X and Y coordinates must be integers, though they can be signed and have any value.  The X and Y coordinates must be in the proper coordinate space of the output image.  This means that Delilah Scanline Renderer is actually a 2D renderer, although it can also be used for 3D rendering if the client handles projecting vertex coordinates into 2D space and clipping.
+The X and Y coordinates must be integers, though they can be signed and have any value.  The X and Y coordinates must be in the proper coordinate space of the output image.  This means that Delilah Scanline Renderer is actually a 2D renderer, although it can also be used for 3D rendering if the client handles projecting vertex coordinates into 2D space and clipping.
 
-The Z coordinate is a floating-point value that is used to determine visibility when triangles overlap.  For 2D rendering applications with no significant overlap, the accessor function for the Z coordinate can just return a constant value.  The Delilah Scanline Renderer maintains a Z buffer for each scanline, which the client can read after rendering if the client desires to capture Z buffer information.  Z coordinate values must always be zero or greater, with smaller Z coordinates being closer to the viewer.
+The Z coordinate is a floating-point value that is used to determine visibility when triangles overlap.  For 2D rendering applications with no significant overlap, the accessor function can just return a constant value for the Z coordinate.  The Delilah Scanline Renderer maintains a Z buffer for each scanline, which the client can read after rendering if the client desires to capture Z buffer information.  Z coordinate values must always be zero or greater, with smaller Z coordinates being closer to the viewer.
+
+The shading mode accessor function determines for each triangle whether the triangle shading is _flat_ (triangle shading) or _interpolated_ (vertex shading).  Flat shading means that each triangle has data associated with it that is merely copied to each pixel that it occupies.  Interpolated shading means that each triangle vertex has data associated with it which is interpolated across the triangle surface.
+
+Both shading modes require additional accessor functions specific to the shading mode.  See the
+following subsections for further information.
+
+The client is responsible for maintaining a scanline buffer.  The scanline buffer stores the rendered pixels for a single scanline of the output image.  The Delilah Scanline Renderer renders the output image scanline by scanline.  In all shading modes, the client must provide an accessor function that clears the scanline buffer to a "default" pixel value, which might be either a background color or a fully transparent pixel value, for example.  Specific shading modes have special accessors for rendering into the scanline buffer, as described in the subsections below.
 
 ### 1.1 Flat shading
 
@@ -34,13 +39,15 @@ When rendering a scanline, this function will be invoked to copy the data from a
 
 ### 1.2 Interpolated shading
 
-In interpolated shading mode, the client must maintain an array of _mixing registers_ for the Delilah Scanline Renderer.  The total number of mixing registers required in this array is determined by the constant `DHSCAN_REGCOUNT`.  The following accessor functions are then required in interpolated shading mode in addition to those described earlier:
+In interpolated shading mode, the client must maintain an array of _mixing registers_ for the Delilah Scanline Renderer.  The total number of mixing registers required in this array is determined by the constant `DHSCAN_REGCOUNT`.  The following accessor functions are then required in interpolated shading mode:
 
-- Copy triangle vertex data to mixing register index
-- Copy mixing register index to scanline pixel index
+- Load triangle vertex data into a mixing register
+- Store mixing register to a scanline pixel
 - Mixing function
 
-Interpolated shading supports both data specific to vertices, and data that applies to the triangle as a whole.  (If no vertex-specific data is required, however, flat shading is more efficient and easier to use.)  The copy function takes a reference both to a specific triangle and to a specific vertex within that triangle, so that both vertex and triangle data can be copied into the mixing register.
+Interpolated shading supports both data specific to vertices, and data that applies to the triangle as a whole.  (If no vertex-specific data is required, however, flat shading is more efficient and easier to use.)  The load function takes a reference both to a specific triangle and to a specific vertex within that triangle, so that both vertex and triangle data can be copied into the mixing register.
+
+The store function copies the value in a mixing register into a scanline pixel.  Sophisticated clients might perform pixel rendering here, with information such as UV coordinates, surface normals, and material information stored in the mixing register, which is then rendered to an RGB color in the scanline buffer.
 
 The mixing function takes a destination register index, two source register indices, and a floating-point value in range [0.0, 1.0].  The data in the two source registers should be linearly interpolated according to the floating-point value, and the result should then be written to the destination register.
 
